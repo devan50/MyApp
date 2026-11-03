@@ -1,0 +1,269 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Task Manager</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background: #f1f5f9;
+            margin: 0;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 650px;
+            margin: auto;
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
+        }
+
+        h1 {
+            text-align: center;
+            color: #1e293b;
+        }
+
+        .input-area {
+            display: flex;
+            gap: 10px;
+            margin: 25px 0;
+        }
+
+        input {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            font-size: 16px;
+            min-width: 0;
+        }
+
+        button {
+            padding: 10px 15px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            color: white;
+            background: #2563eb;
+        }
+
+        button:hover {
+            opacity: 0.85;
+        }
+
+        ul {
+            padding: 0;
+            list-style: none;
+        }
+
+        li {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 14px;
+            margin-bottom: 10px;
+            background: #f8fafc;
+            border-radius: 6px;
+        }
+
+        .task-title {
+            flex: 1;
+            overflow-wrap: anywhere;
+        }
+
+        .completed {
+            text-decoration: line-through;
+            color: #94a3b8;
+        }
+
+        .delete-btn {
+            background: #dc2626;
+        }
+
+        .status {
+            text-align: center;
+            color: #64748b;
+        }
+
+        @media (max-width: 450px) {
+            .input-area {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+
+        <h1>My Task Manager</h1>
+
+        <div class="input-area">
+            <input
+                type="text"
+                id="taskInput"
+                placeholder="Enter a new task..."
+            >
+
+            <button onclick="addTask()">Add Task</button>
+        </div>
+
+        <p class="status" id="status">Loading tasks...</p>
+
+        <ul id="taskList"></ul>
+
+    </div>
+
+    <script>
+        const API = "/api/tasks";
+
+        async function loadTasks() {
+            const status = document.getElementById("status");
+
+            try {
+                const response = await fetch(API);
+
+                if (!response.ok) {
+                    throw new Error("Failed to load tasks");
+                }
+
+                const tasks = await response.json();
+
+                const taskList = document.getElementById("taskList");
+                taskList.innerHTML = "";
+
+                status.textContent = tasks.length
+                    ? `${tasks.length} task(s)`
+                    : "No tasks yet. Add your first task!";
+
+                tasks.forEach(task => {
+                    const li = document.createElement("li");
+
+                    const title = document.createElement("span");
+                    title.className = "task-title";
+                    title.textContent = task.title;
+
+                    if (task.completed) {
+                        title.classList.add("completed");
+                    }
+
+                    const completeButton = document.createElement("button");
+                    completeButton.textContent = task.completed
+                        ? "Undo"
+                        : "Complete";
+
+                    completeButton.onclick = () => updateTask(
+                        task.id,
+                        !task.completed
+                    );
+
+                    const deleteButton = document.createElement("button");
+                    deleteButton.textContent = "Delete";
+                    deleteButton.className = "delete-btn";
+                    deleteButton.onclick = () => deleteTask(task.id);
+
+                    li.append(title, completeButton, deleteButton);
+                    taskList.appendChild(li);
+                });
+
+            } catch (error) {
+                status.textContent = "Could not connect to the API.";
+                console.error(error);
+            }
+        }
+
+        async function addTask() {
+            const input = document.getElementById("taskInput");
+            const title = input.value.trim();
+
+            if (!title) {
+                alert("Please enter a task!");
+                return;
+            }
+
+            try {
+                const response = await fetch(API, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ title })
+                });
+
+                if (!response.ok) {
+                    throw new Error("Could not add task");
+                }
+
+                input.value = "";
+                loadTasks();
+
+            } catch (error) {
+                alert("Failed to add task.");
+                console.error(error);
+            }
+        }
+
+        async function updateTask(id, completed) {
+            try {
+                const response = await fetch(`${API}/${id}`, {
+                    method: "PATCH",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ completed })
+                });
+
+                if (!response.ok) {
+                    throw new Error("Could not update task");
+                }
+
+                loadTasks();
+
+            } catch (error) {
+                alert("Failed to update task.");
+                console.error(error);
+            }
+        }
+
+        async function deleteTask(id) {
+            if (!confirm("Delete this task?")) return;
+
+            try {
+                const response = await fetch(`${API}/${id}`, {
+                    method: "DELETE"
+                });
+
+                if (!response.ok) {
+                    throw new Error("Could not delete task");
+                }
+
+                loadTasks();
+
+            } catch (error) {
+                alert("Failed to delete task.");
+                console.error(error);
+            }
+        }
+
+        document.getElementById("taskInput")
+            .addEventListener("keydown", event => {
+                if (event.key === "Enter") addTask();
+            });
+
+        loadTasks();
+    </script>
+
+</body>
+</html>
+

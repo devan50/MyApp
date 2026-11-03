@@ -1,0 +1,25 @@
+
+services:
+  db:
+    image: postgres:16
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  api:
+    build: ./api
+    ports: ["8000:8000"]
+    depends_on: [db]
+  
+  web:
+    image: nginx:alpine
+    ports: ["80:80"]
+    depends_on: [api]
+      
+
+volumes:
+  db_data:
+
+networks:
+  app-net:
+  
+
