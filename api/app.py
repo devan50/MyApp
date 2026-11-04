@@ -1,117 +1,158 @@
 
 import os
-import sqlite3
+import psycopg2
 from flask import Flask, request, jsonify
+from psycopg2.extras import RealDictCursor
 
 app = Flask(__name__)
 
-DB_PATH = os.getenv("DB_PATH", "/data/tasks.db")
+# PostgreSQL configuration
+DB_CONFIG = {
+    "host": os.getenv("DB_HOST", "db"),
+    "port": os.getenv("DB_PORT", "5432"),
+    "database": os.getenv("POSTGRES_DB", "taskmanager"),
+    "user": os.getenv("POSTGRES_USER", "admin"),
+    "password": os.getenv("POSTGRES_PASSWORD", "mypassword")
+}
 
 
-def get_db():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+# Database connection
+def get_db_connection():
+    return psycopg2.connect(**DB_CONFIG)
 
 
+# Create tasks table
 def init_db():
-    with get_db() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                completed BOOLEAN DEFAULT 0
-            )
-        """)
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS tasks (
+            id SERIAL PRIMARY KEY,
+            title VARCHAR(200) NOT NULL,
+            description TEXT,
+            status VARCHAR(30) DEFAULT 'Pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    conn.commit()
+    cur.close()
+    conn.close()
 
 
+# API home
 @app.route("/")
 def home():
     return jsonify({
-        "message": "Task Manager API is running!",
-        "endpoints": [
-            "/health",
-            "/api/tasks"
-        ]
+        "application": "Professional Task Manager",
+        "version": "1.0",
+        "status": "running"
     })
 
 
+# Health check
 @app.route("/health")
 def health():
-    return jsonify({"status": "healthy"})
+    try:
+        conn = get_db_connection()
+        conn.close()
+        return jsonify({"status": "healthy", "database": "connected"})
+    except Exception as error:
+        return jsonify({"status": "unhealthy", "error": str(error)}), 500
 
 
 # Get all tasks
-@app.route("/api/tasks", methods=["GET"])
+@app.route("/tasks", methods=["GET"])
 def get_tasks():
-    with get_db() as conn:
-        tasks = conn.execute(
-            "SELECT * FROM tasks ORDER BY id DESC"
-        ).fetchall()
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    return jsonify([dict(task) for task in tasks])
+    cur.execute("SELECT * FROM tasks ORDER BY id DESC")
+    tasks = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    return jsonify(tasks)
 
 
-# Create a new task
-@app.route("/api/tasks", methods=["POST"])
-def create_task():
-    data = request.get_json(silent=True) or {}
-    title = data.get("title")
+# Add a task
+@app.route("/tasks", methods=["POST"])
+def add_task():
+    data = request.get_json()
 
-    if not isinstance(title, str) or not title.strip():
+    if not data or not data.get("title"):
         return jsonify({"error": "Task title is required"}), 400
 
-    with get_db() as conn:
-        cursor = conn.execute(
-            "INSERT INTO tasks (title) VALUES (?)",
-            (title.strip(),)
-        )
-        task_id = cursor.lastrowid
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    return jsonify({
-        "id": task_id,
-        "title": title.strip(),
-        "completed": False
-    }), 201
+    cur.execute("""
+        INSERT INTO tasks (title, description)
+        VALUES (%s, %s)
+        RETURNING *
+    """, (data["title"], data.get("description", "")))
+
+    task = cur.fetchone()
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return jsonify(task), 201
 
 
-# Update task completion status
-@app.route("/api/tasks/<int:task_id>", methods=["PATCH"])
+# Update task status
+@app.route("/tasks/<int:task_id>", methods=["PUT"])
 def update_task(task_id):
-    data = request.get_json(silent=True) or {}
+    data = request.get_json()
 
-    if not isinstance(data.get("completed"), bool):
-        return jsonify({"error": "completed must be true or false"}), 400
+    if not data or not data.get("status"):
+        return jsonify({"error": "Status is required"}), 400
 
-    with get_db() as conn:
-        cursor = conn.execute(
-            "UPDATE tasks SET completed = ? WHERE id = ?",
-            (data["completed"], task_id)
-        )
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        if cursor.rowcount == 0:
-            return jsonify({"error": "Task not found"}), 404
+    cur.execute("""
+        UPDATE tasks
+        SET status = %s
+        WHERE id = %s
+        RETURNING *
+    """, (data["status"], task_id))
 
-    return jsonify({"message": "Task updated successfully"})
+    task = cur.fetchone()
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    if task is None:
+        return jsonify({"error": "Task not found"}), 404
+
+    return jsonify(task)
 
 
-# Delete a task
-@app.route("/api/tasks/<int:task_id>", methods=["DELETE"])
+# Delete task
+@app.route("/tasks/<int:task_id>", methods=["DELETE"])
 def delete_task(task_id):
-    with get_db() as conn:
-        cursor = conn.execute(
-            "DELETE FROM tasks WHERE id = ?",
-            (task_id,)
-        )
+    conn = get_db_connection()
+    cur = conn.cursor()
 
-        if cursor.rowcount == 0:
-            return jsonify({"error": "Task not found"}), 404
+    cur.execute("DELETE FROM tasks WHERE id = %s", (task_id,))
+    deleted = cur.rowcount
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    if deleted == 0:
+        return jsonify({"error": "Task not found"}), 404
 
     return jsonify({"message": "Task deleted successfully"})
 
 
 if __name__ == "__main__":
     init_db()
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=int(os.getenv("APP_PORT", 5000)))
 
